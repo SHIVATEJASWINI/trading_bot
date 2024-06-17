@@ -1,0 +1,93 @@
+# scripts/trading_bot.py
+
+import pandas as pd
+import requests
+import schedule
+import time
+
+class TradingBot:
+    def __init__(self, symbol, short_window=5, long_window=20, initial_cash=10000):
+        self.symbol = symbol
+        self.short_window = short_window
+        self.long_window = long_window
+        self.cash = initial_cash
+        self.shares = 0
+        self.data = pd.DataFrame()
+        self.trade_log = []
+        self.api_url = f"https://api.example.com/stock/{self.symbol}/quote"  # Update with actual API URL
+        self.load_initial_data()
+
+    def load_initial_data(self):
+        self.data = pd.read_csv('../data/stock_prices.csv', parse_dates=['Date'], index_col='Date')
+        self.data['SMA_5'] = self.data['Close'].rolling(window=self.short_window).mean()
+        self.data['SMA_20'] = self.data['Close'].rolling(window=self.long_window).mean()
+
+    def fetch_data(self):
+        # Simulate fetching data from an API
+        response = requests.get(self.api_url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return None
+
+    def update_data(self):
+        new_data = self.fetch_data()
+        if new_data:
+            new_entry = {
+                'Date': pd.to_datetime(new_data['date']),
+                'Close': new_data['close']
+            }
+            self.data = self.data.append(new_entry, ignore_index=True)
+            self.data.set_index('Date', inplace=True)
+            self.data['SMA_5'] = self.data['Close'].rolling(window=self.short_window).mean()
+            self.data['SMA_20'] = self.data['Close'].rolling(window=self.long_window).mean()
+
+    def generate_signal(self):
+        if len(self.data) >= self.long_window:
+            if self.data['SMA_5'].iloc[-1] > self.data['SMA_20'].iloc[-1]:
+                return 'BUY'
+            elif self.data['SMA_5'].iloc[-1] < self.data['SMA_20'].iloc[-1]:
+                return 'SELL'
+        return 'HOLD'
+
+    def execute_trade(self, signal):
+        price = self.data['Close'].iloc[-1]
+        if signal == 'BUY' and self.cash > 0:
+            self.shares = self.cash // price
+            self.cash -= self.shares * price
+            self.log_trade('BUY', self.shares, price)
+        elif signal == 'SELL' and self.shares > 0:
+            self.cash += self.shares * price
+            self.log_trade('SELL', self.shares, price)
+            self.shares = 0
+
+    def log_trade(self, action, shares, price):
+        self.trade_log.append({
+            'Date': pd.to_datetime('now'),
+            'Action': action,
+            'Shares': shares,
+            'Price': price,
+            'Cash': self.cash,
+            'Portfolio Value': self.cash + self.shares * price
+        })
+        print(f"{action} {shares} shares at {price}")
+
+    def run(self):
+        self.update_data()
+        signal = self.generate_signal()
+        self.execute_trade(signal)
+
+    def save_trade_log(self):
+        pd.DataFrame(self.trade_log).to_csv('../data/trade_log.csv', index=False)
+
+if __name__ == "__main__":
+    bot = TradingBot(symbol='AAPL')
+    schedule.every(1).minute.do(bot.run)
+
+    try:
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        bot.save_trade_log()
+        print("Trade log saved.")
